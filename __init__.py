@@ -210,6 +210,7 @@ class SAVE_REMINDER_OT_reset_timer(Operator):
     def execute(self, context):
         prefs = get_prefs()
         reset_status(prefs, "计时器已重置")
+        bpy.app.timers.register(update_msg, first_interval=3.0)
         reset_timer(prefs)
         return {'FINISHED'}
 
