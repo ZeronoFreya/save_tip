@@ -23,6 +23,9 @@ _current_threshold = 120     # 当前需要达到的秒数（阈值）
 
 
 # ---------- 辅助函数 ----------
+def get_prefs():
+    return bpy.context.preferences.addons.get(__name__).preferences
+
 def format_elapsed(seconds):
     seconds = int(seconds)  # 确保为整数
     if seconds < 60:
@@ -48,10 +51,20 @@ def update_msg(msg=""):
     return None       
 
 def reset_status(prefs, msg=""):
-    global _last_save_time, _current_threshold, _reminder_message  
+    global _last_save_time, _current_threshold  
     _last_save_time = time.time()
     _current_threshold = prefs.reminder_interval
-    update_msg(msg)         
+    update_msg(msg)        
+
+# ---------- 回调函数 ----------
+def update_interval(self, context):
+    """用户修改提醒间隔时，更新基础间隔并重置阈值"""
+    reset_status(self)
+    if self.enabled:
+        reset_timer(self)
+
+def switch_plugin(self, context):
+    update_interval(self, context)
 
 # ---------- 偏好设置 ----------
 class SaveReminderPreferences(AddonPreferences):
@@ -63,9 +76,8 @@ class SaveReminderPreferences(AddonPreferences):
         default=120,
         min=1,
         max=3600,
-        update=lambda self, context: update_interval()  # 修改时更新全局
-    )  # type: ignore
-    enabled: BoolProperty(name="启用提醒", default=True)  # type: ignore
+        update=update_interval)  # type: ignore
+    enabled: BoolProperty(name="启用提醒", default=True, update=switch_plugin)  # type: ignore
     top_margin: IntProperty(name="顶部距离(px)", default=50, min=0, max=500)  # type: ignore
     left_margin: IntProperty(name="左侧距离(px)", default=200, min=0, max=500)  # type: ignore
 
@@ -78,16 +90,7 @@ class SaveReminderPreferences(AddonPreferences):
         layout.prop(self, "top_margin")
         layout.prop(self, "left_margin")
 
-def get_prefs():
-    return bpy.context.preferences.addons.get(__name__).preferences
 
-
-def update_interval():
-    """用户修改提醒间隔时，更新基础间隔并重置阈值"""
-    global _current_threshold
-    prefs = get_prefs()
-    if prefs:
-        _current_threshold = prefs.reminder_interval   # 重置当前阈值，让新间隔立即生效
 
 # ---------- 核心逻辑 ----------
 def check_and_remind(prefs):
