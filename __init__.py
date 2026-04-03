@@ -16,12 +16,11 @@ from bpy.props import IntProperty, BoolProperty
 from bpy.app.handlers import persistent
 
 # ---------- 全局变量 ----------
-_pref = None
 _draw_handle = None
 _reminder_message = ""
 _last_save_time = 0          # 上次保存的时间戳
 _current_threshold = 120     # 当前需要达到的秒数（阈值）
-_base_interval = 120         # 基础间隔（秒），固定累加步长
+
 
 # ---------- 辅助函数 ----------
 def format_elapsed(seconds):
@@ -42,6 +41,18 @@ def redraw_3d_views():
             if area.type == 'VIEW_3D':
                 area.tag_redraw()
 
+def update_msg(msg=""):
+    global _reminder_message
+    _reminder_message = msg
+    redraw_3d_views()
+    return None       
+
+def reset_status(prefs, msg=""):
+    global _last_save_time, _current_threshold, _reminder_message  
+    _last_save_time = time.time()
+    _current_threshold = prefs.reminder_interval
+    update_msg(msg)         
+
 # ---------- 偏好设置 ----------
 class SaveReminderPreferences(AddonPreferences):
     bl_idname = __name__
@@ -55,7 +66,6 @@ class SaveReminderPreferences(AddonPreferences):
         update=lambda self, context: update_interval()  # 修改时更新全局
     )  # type: ignore
     enabled: BoolProperty(name="启用提醒", default=True)  # type: ignore
-    show_text: BoolProperty(name="显示提醒文字", default=True)  # type: ignore
     top_margin: IntProperty(name="顶部距离(px)", default=50, min=0, max=500)  # type: ignore
     left_margin: IntProperty(name="左侧距离(px)", default=200, min=0, max=500)  # type: ignore
 
@@ -63,7 +73,6 @@ class SaveReminderPreferences(AddonPreferences):
         layout = self.layout
         layout.prop(self, "enabled")
         layout.prop(self, "reminder_interval")
-        layout.prop(self, "show_text")
         layout.separator()
         layout.label(text="文字位置:")
         layout.prop(self, "top_margin")
@@ -73,85 +82,62 @@ def get_prefs():
     return bpy.context.preferences.addons.get(__name__).preferences
 
 
-# def get_prefs():
-#     global _pref
-#     if _pref is None:
-#         name = '.'.join(__name__.split('.')[:-1])
-#         _pref = bpy.context.preferences.addons.get(name).preferences
-#     return _pref
-
 def update_interval():
     """用户修改提醒间隔时，更新基础间隔并重置阈值"""
-    global _base_interval, _current_threshold
+    global _current_threshold
     prefs = get_prefs()
     if prefs:
-        _base_interval = prefs.reminder_interval
-        _current_threshold = _base_interval   # 重置当前阈值，让新间隔立即生效
+        _current_threshold = prefs.reminder_interval   # 重置当前阈值，让新间隔立即生效
 
 # ---------- 核心逻辑 ----------
-def check_and_remind():
-    global _last_save_time, _current_threshold, _reminder_message, _base_interval
-    prefs = get_prefs()
-    if not prefs.enabled:
-        return
-
-    # 确保基础间隔是最新的（用户可能通过面板修改）
-    _base_interval = prefs.reminder_interval
+def check_and_remind(prefs):
+    global _current_threshold   
 
     now = time.time()
-    if _last_save_time == 0:
-        _last_save_time = now
-        _current_threshold = _base_interval
-        return
-
     elapsed = now - _last_save_time
     if elapsed >= _current_threshold:
         # 触发提醒
         msg = format_elapsed(elapsed)
-        _reminder_message = msg
-        redraw_3d_views()
-
-        # 5秒后清除消息
-        def clear():
-            global _reminder_message
-            _reminder_message = ""
-            redraw_3d_views()
-            return None
-        bpy.app.timers.register(clear, first_interval=5.0)
+        update_msg(msg)
+        bpy.app.timers.register(update_msg, first_interval=5.0)
 
         # 增加阈值（固定步长）
-        _current_threshold += _base_interval
+        _current_threshold += prefs.reminder_interval
 
-def reset_timer():
-    """保存文件时调用，重置计时状态"""
-    global _last_save_time, _current_threshold, _reminder_message, _base_interval
-    prefs = get_prefs()
-    _base_interval = prefs.reminder_interval
-    _last_save_time = time.time()
-    _current_threshold = _base_interval
-    _reminder_message = "计时器已重置"
-    redraw_3d_views()
 
-    def clear_confirm():
-        global _reminder_message
-        if _reminder_message == "计时器已重置":
-            _reminder_message = ""
-            redraw_3d_views()
-        return None
-    bpy.app.timers.register(clear_confirm, first_interval=2.0)
 
 # ---------- 定时器 ----------
 def timer_callback():
-    try:
-        check_and_remind()
-    except Exception as e:
-        print("[Save Tip] 定时器错误:", e)
+    prefs = get_prefs()
+    if not prefs.enabled:
+        return None
+    if _last_save_time == 0:
+        reset_status(prefs)
+    else:
+        try:
+            check_and_remind(prefs)
+        except Exception as e:
+            print("[Save Tip] 定时器错误:", e)
     return 1.0
+
+def reset_timer(prefs):
+    """保存文件时调用，重置计时状态"""
+    timer_remove()    
+    if not prefs.enabled:
+        return
+    bpy.app.timers.register(timer_callback, first_interval=1.0, persistent=True)
+    
+
+def timer_remove():
+    try:
+        bpy.app.timers.unregister(timer_callback)
+    except ValueError:
+        pass
 
 # ---------- GPU 绘制 ----------
 def draw_callback():
     prefs = get_prefs()
-    if not prefs.enabled or not prefs.show_text or not _reminder_message:
+    if not prefs.enabled or not _reminder_message:
         return
 
     # 寻找第一个 3D 视图的 WINDOW 区域
@@ -182,23 +168,20 @@ def draw_callback():
     blf.color(font_id, 1.0, 0.6, 0.2, 1.0)
     blf.draw(font_id, _reminder_message)
 
+
+
 # ---------- 事件处理器 ----------
 @persistent
 def save_post_handler(scene, depsgraph=None):
-    reset_timer()
+    prefs = get_prefs()
+    reset_status(prefs)
 
 @persistent
 def load_post_handler(scene, depsgraph=None):
-    global _last_save_time, _current_threshold, _reminder_message
-    _last_save_time = 0
-    _current_threshold = 120
-    _reminder_message = ""
-    try:
-        bpy.app.timers.unregister(timer_callback)
-    except ValueError:
-        pass
-    bpy.app.timers.register(timer_callback, first_interval=1.0, persistent=True)
-    print("[Save Tip] 文件加载，定时器已重启")
+    prefs = get_prefs()
+    reset_status(prefs)
+    reset_timer(prefs)
+
 
 # ---------- UI ----------
 class SAVE_REMINDER_PT_panel(Panel):
@@ -213,7 +196,6 @@ class SAVE_REMINDER_PT_panel(Panel):
         layout = self.layout
         layout.prop(prefs, "enabled")
         layout.prop(prefs, "reminder_interval")
-        layout.prop(prefs, "show_text")
         layout.separator()
         layout.prop(prefs, "top_margin")
         layout.prop(prefs, "left_margin")
@@ -223,7 +205,9 @@ class SAVE_REMINDER_OT_reset_timer(Operator):
     bl_idname = "save_reminder.reset_timer"
     bl_label = "重置计时器"
     def execute(self, context):
-        reset_timer()
+        prefs = get_prefs()
+        reset_status(prefs, "计时器已重置")
+        reset_timer(prefs)
         return {'FINISHED'}
 
 # ---------- 注册 ----------
@@ -241,18 +225,8 @@ def register():
     if load_post_handler not in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.append(load_post_handler)
 
-    try:
-        bpy.app.timers.unregister(timer_callback)
-    except ValueError:
-        pass
-    bpy.app.timers.register(timer_callback, first_interval=1.0, persistent=True)
-
-    # 初始化基础间隔
     prefs = get_prefs()
-    if prefs:
-        global _base_interval, _current_threshold
-        _base_interval = prefs.reminder_interval
-        _current_threshold = _base_interval
+    reset_timer(prefs)
 
     print("[Save Tip] 插件已启动")
 
@@ -267,10 +241,7 @@ def unregister():
     if load_post_handler in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(load_post_handler)
 
-    try:
-        bpy.app.timers.unregister(timer_callback)
-    except ValueError:
-        pass
+    timer_remove()
 
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
