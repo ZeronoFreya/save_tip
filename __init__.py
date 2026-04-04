@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Save Tip",
     "author": "zeronofreya",
-    "version": (0, 0, 1),
+    "version": (0, 0, 2),
     "blender": (5, 0, 0),
     "location": "View3D > Sidebar > Save Tip",
     "description": "简单保存提醒：超过间隔提示，每次增加固定步长",
